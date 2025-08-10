@@ -91,21 +91,21 @@ def analyze_summary(df: pd.DataFrame, group_by_cols: list) -> pd.DataFrame:
     summary = df.groupby(group_by_cols).apply(lambda g: pd.Series({
         '総損益': g['実現損益（円貨）'].sum(),
         '取引回数': len(g),
-        '勝ちトレード数': (g['実現損益（円貨）'] > 0).sum(),
-        '負けトレード数': (g['実現損益（円貨）'] < 0).sum(),
-        '勝ちトレードの平均保有時間': g[g['実現損益（円貨）'] > 0]['保有時間'].mean() if not g[g['実現損益（円貨）'] > 0].empty else pd.NaT,
-        '負けトレードの平均保有時間': g[g['実現損益（円貨）'] < 0]['保有時間'].mean() if not g[g['実現損益（円貨）'] < 0].empty else pd.NaT,
-        '1ロットあたり平均利益': g[g['実現損益（円貨）'] > 0]['1ロットあたり損益'].mean(),
-        '1ロットあたり平均損失': g[g['実現損益（円貨）'] < 0]['1ロットあたり損益'].mean(),
+        '勝ち数': (g['実現損益（円貨）'] > 0).sum(),
+        '負け数': (g['実現損益（円貨）'] < 0).sum(),
+        '勝ち平均時間': g[g['実現損益（円貨）'] > 0]['保有時間'].mean() if not g[g['実現損益（円貨）'] > 0].empty else pd.NaT,
+        '負け平均時間': g[g['実現損益（円貨）'] < 0]['保有時間'].mean() if not g[g['実現損益（円貨）'] < 0].empty else pd.NaT,
+        '1ロット利益': g[g['実現損益（円貨）'] > 0]['1ロットあたり損益'].mean(),
+        '1ロット損失': g[g['実現損益（円貨）'] < 0]['1ロットあたり損益'].mean(),
     })).reset_index()
 
-    summary['勝率'] = (summary['勝ちトレード数'] / summary['取引回数'] * 100).fillna(0)
+    summary['勝率'] = (summary['勝ち数'] / summary['取引回数'] * 100).fillna(0)
     summary['総利益'] = df[df['実現損益（円貨）'] > 0].groupby(group_by_cols)['実現損益（円貨）'].sum().reindex(summary.set_index(group_by_cols).index).fillna(0).values
     summary['総損失'] = df[df['実現損益（円貨）'] < 0].groupby(group_by_cols)['実現損益（円貨）'].sum().reindex(summary.set_index(group_by_cols).index).fillna(0).values
-    summary['プロフィットファクター'] = (summary['総利益'] / abs(summary['総損失'])).fillna(float('inf'))
-    summary['平均利益'] = (summary['総利益'] / summary['勝ちトレード数']).fillna(0)
-    summary['平均損失'] = (summary['総損失'] / summary['負けトレード数']).fillna(0)
-    summary['リスクリワードレシオ'] = (summary['平均利益'] / abs(summary['平均損失'])).fillna(float('inf'))
+    summary['PF'] = (summary['総利益'] / abs(summary['総損失'])).fillna(float('inf'))
+    summary['平均利益'] = (summary['総利益'] / summary['勝ち数']).fillna(0)
+    summary['平均損失'] = (summary['総損失'] / summary['負け数']).fillna(0)
+    summary['RR'] = (summary['平均利益'] / abs(summary['平均損失'])).fillna(float('inf'))
 
     return summary
 
@@ -120,22 +120,22 @@ def style_and_format_summary(df: pd.DataFrame):
 
     format_dict = {
         '総損益': '{:,.0f}',
-        'FX売買損益': '{:,.0f}',
-        'FXスワップ損益': '{:,.0f}',
+        '売買損益': '{:,.0f}',
+        'スワップ': '{:,.0f}',
         '取引回数': '{:,.0f}',
-        '勝ちトレード数': '{:,.0f}',
-        '負けトレード数': '{:,.0f}',
+        '勝ち数': '{:,.0f}',
+        '負け数': '{:,.0f}',
         '総利益': '{:,.0f}',
         '総損失': '{:,.0f}',
         '勝率': '{:.1f}%',
-        'プロフィットファクター': '{:.2f}',
+        'PF': '{:.2f}',
         '平均利益': '{:,.1f}',
         '平均損失': '{:,.1f}',
-        'リスクリワードレシオ': '{:.2f}',
-        '1ロットあたり平均利益': '{:,.1f}',
-        '1ロットあたり平均損失': '{:,.1f}',
-        '勝ちトレードの平均保有時間': format_timedelta,
-        '負けトレードの平均保有時間': format_timedelta,
+        'RR': '{:.2f}',
+        '1ロット利益': '{:,.1f}',
+        '1ロット損失': '{:,.1f}',
+        '勝ち平均時間': format_timedelta,
+        '負け平均時間': format_timedelta,
     }
 
     def color_positive_negative(val):
@@ -155,23 +155,17 @@ def style_and_format_summary(df: pd.DataFrame):
         return f'color: {color}'
 
     styler = (df.style
-        .applymap(color_positive_negative, subset=[col for col in ['総損益', 'FX売買損益', 'FXスワップ損益'] if col in df.columns])
+        .applymap(color_positive_negative, subset=[col for col in ['総損益', '売買損益', 'スワップ'] if col in df.columns])
         .applymap(color_win_rate, subset=['勝率'])
-        .applymap(color_ratio, subset=['プロフィットファクター', 'リスクリワードレシオ'])
+        .applymap(color_ratio, subset=['PF', 'RR'])
         .format(format_dict, na_rep='N/A')
     )
     return styler
 
 # --- Streamlit App ---
 st.set_page_config(layout="wide")
-st.title('📈 取引履歴分析アプリ')
+st.title('📈 GMO取引履歴分析アプリ')
 
-st.info(
-    """
-    1. GMOクリック証券の取引履歴CSVファイルをアップロードしてください。
-    2. 自動で文字コードが変換され、分析結果が表示されます。
-    """
-)
 
 uploaded_file = st.file_uploader("CSVファイルをアップロード", type=['csv'])
 
@@ -201,12 +195,12 @@ if uploaded_file is not None:
                 st.subheader('📊 FXサマリー')
                 if not fx_df.empty:
                     fx_total_summary = analyze_summary(fx_df.copy(), ['取引種別'])
-                    fx_total_summary.rename(columns={'総損益': 'FX売買損益'}, inplace=True)
-                    fx_total_summary['FXスワップ損益'] = total_swap_profit
-                    fx_total_summary['総損益'] = fx_total_summary['FX売買損益'] + fx_total_summary['FXスワップ損益']
+                    fx_total_summary.rename(columns={'総損益': '売買損益'}, inplace=True)
+                    fx_total_summary['スワップ'] = total_swap_profit
+                    fx_total_summary['総損益'] = fx_total_summary['売買損益'] + fx_total_summary['スワップ']
                     fx_total_summary = fx_total_summary.rename(columns={'取引種別': '種類'})
                     
-                    fx_total_display_order = ['総損益', 'FX売買損益', 'FXスワップ損益', '取引回数', '勝率', 'プロフィットファクター', 'リスクリワードレシオ', '1ロットあたり平均利益', '1ロットあたり平均損失', '勝ちトレードの平均保有時間', '負けトレードの平均保有時間']
+                    fx_total_display_order = ['総損益', '売買損益', 'スワップ', '取引回数', '勝ち数', '負け数', '勝率', '総利益', '総損失','PF','平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失', '勝ち平均時間', '負け平均時間']
                     st.dataframe(style_and_format_summary(fx_total_summary.set_index('種類')[fx_total_display_order]), use_container_width=True)
 
                     st.markdown("**FX 月別サマリー**")
@@ -218,28 +212,28 @@ if uploaded_file is not None:
                     chart_df['累積損益'] = chart_df['月次合計損益'].cumsum()
                     st.line_chart(chart_df.set_index('決済年月')['累積損益'])
                     
-                    fx_monthly_display = fx_monthly_summary.rename(columns={'総損益': 'FX売買損益'})
-                    monthly_swap_df = monthly_swap_summary.rename(columns={'実現損益（円貨）': 'FXスワップ損益'})
+                    fx_monthly_display = fx_monthly_summary.rename(columns={'総損益': '売買損益'})
+                    monthly_swap_df = monthly_swap_summary.rename(columns={'実現損益（円貨）': 'スワップ'})
                     combined_monthly = pd.merge(fx_monthly_display, monthly_swap_df, on='決済年月', how='outer')
-                    numeric_cols = ['FX売買損益', 'FXスワップ損益', '取引回数', '勝ちトレード数', '負けトレード数', '総利益', '総損失', '勝率', 'プロフィットファクター', '平均利益', '平均損失', 'リスクリワードレシオ', '1ロットあたり平均利益', '1ロットあたり平均損失']
+                    numeric_cols = ['売買損益', 'スワップ', '取引回数', '勝ち数', '負け数', '総利益', '総損失', '勝率', 'PF', '平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失']
                     for col in numeric_cols:
                         if col in combined_monthly.columns:
                             combined_monthly[col] = combined_monthly[col].fillna(0)
-                    combined_monthly['総損益'] = combined_monthly['FX売買損益'] + combined_monthly['FXスワップ損益']
-                    fx_monthly_display_order = ['決済年月', '総損益', 'FX売買損益', 'FXスワップ損益', '取引回数', '勝率', 'プロフィットファクター', 'リスクリワードレシオ', '1ロットあたり平均利益', '1ロットあたり平均損失', '勝ちトレードの平均保有時間', '負けトレードの平均保有時間']
+                    combined_monthly['総損益'] = combined_monthly['売買損益'] + combined_monthly['スワップ']
+                    fx_monthly_display_order = ['決済年月', '総損益', '売買損益', 'スワップ', '取引回数', '勝ち数', '負け数', '勝率', '総利益', '総損失','PF','平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失', '勝ち平均時間', '負け平均時間']
                     st.dataframe(style_and_format_summary(combined_monthly.sort_values(by='決済年月')[fx_monthly_display_order]), use_container_width=True)
 
                     st.markdown("**FX 銘柄別サマリー**")
                     fx_symbol_summary = analyze_summary(fx_df, ['銘柄名', 'ポジション'])
-                    symbol_swap_df = swap_df.groupby('銘柄名')['実現損益（円貨）'].sum().reset_index().rename(columns={'実現損益（円貨）': 'FXスワップ損益'})
+                    symbol_swap_df = swap_df.groupby('銘柄名')['実現損益（円貨）'].sum().reset_index().rename(columns={'実現損益（円貨）': 'スワップ'})
                     combined_symbol = pd.merge(fx_symbol_summary, symbol_swap_df, on='銘柄名', how='left')
-                    numeric_cols_symbol = ['総損益', 'FXスワップ損益', '取引回数', '勝ちトレード数', '負けトレード数', '総利益', '総損失', '勝率', 'プロフィットファクター', '平均利益', '平均損失', 'リスクリワードレシオ', '1ロットあたり平均利益', '1ロットあたり平均損失']
+                    numeric_cols_symbol = ['総損益', 'スワップ', '取引回数', '勝ち数', '負け数', '総利益', '総損失', '勝率', 'PF', '平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失']
                     for col in numeric_cols_symbol:
                         if col in combined_symbol.columns:
                             combined_symbol[col] = combined_symbol[col].fillna(0)
-                    combined_symbol.rename(columns={'総損益': 'FX売買損益'}, inplace=True)
-                    combined_symbol['総損益'] = combined_symbol['FX売買損益'] + combined_symbol['FXスワップ損益']
-                    fx_symbol_display_order = ['銘柄名', 'ポジション', '総損益', 'FX売買損益', 'FXスワップ損益', '取引回数', '勝率', 'プロフィットファクター', 'リスクリワードレシオ', '1ロットあたり平均利益', '1ロットあたり平均損失', '勝ちトレードの平均保有時間', '負けトレードの平均保有時間']
+                    combined_symbol.rename(columns={'総損益': '売買損益'}, inplace=True)
+                    combined_symbol['総損益'] = combined_symbol['売買損益'] + combined_symbol['スワップ']
+                    fx_symbol_display_order = ['銘柄名', 'ポジション', '総損益', '売買損益', 'スワップ', '取引回数', '勝ち数', '負け数', '勝率', '総利益', '総損失','PF','平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失', '勝ち平均時間', '負け平均時間']
                     st.dataframe(style_and_format_summary(combined_symbol[fx_symbol_display_order]), use_container_width=True)
                 else:
                     st.info('FXの取引データはありませんでした。')
@@ -270,4 +264,15 @@ if uploaded_file is not None:
         st.error("ファイルの形式が正しくないか、予期せぬデータが含まれている可能性があります。")
 
 else:
-    st.info('サイドバーからCSVファイルをアップロードして分析を開始してください。')
+    st.info('CSVファイルをアップロードして分析を開始してください。')
+
+st.info(
+    """
+    使い方\r\n
+    1. GMOクリック証券の取引履歴CSVファイルをダウンロードしてください。\r\n
+    （GMOクリック証券のマイページにログイン後、CFDまたはFXネオ→積算表\r\n
+    　→FXネオ取引口座の取引とスワップを☑、CFDの取引を☑→分析したい期間を選択\r\n
+    　→検索のボタンをクリック→下段のダウンロードを選択）
+    2. ダウンロードしたCSVファイルをこのwebアプリにアップロードしてください。
+    """
+)
