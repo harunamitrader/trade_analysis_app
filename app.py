@@ -3,6 +3,11 @@ import pandas as pd
 import io
 from datetime import timedelta
 
+def get_adjusted_date(dt):
+    if dt.hour < 7:
+        return dt - pd.Timedelta(days=1)
+    return dt
+
 def process_trades(df: pd.DataFrame) -> pd.DataFrame:
     """
     取引履歴データを処理し、各決済取引に保有時間、ロット数、取引種別、決済年月を付与する。
@@ -23,6 +28,7 @@ def process_trades(df: pd.DataFrame) -> pd.DataFrame:
     results = []
 
     for _, closed_trade in closed_trades.sort_values(by='約定日時').iterrows():
+        adjusted_date = get_adjusted_date(closed_trade['約定日時'])
         closed_qty = closed_trade['約定数量']
         is_matched = False
         
@@ -56,7 +62,8 @@ def process_trades(df: pd.DataFrame) -> pd.DataFrame:
                 '保有時間': holding_time,
                 'ロット数': normalized_lot,
                 '取引種別': trade_type,
-                '決済年月': closed_trade['約定日時'].strftime('%Y-%m')
+                '決済年月': adjusted_date.strftime('%Y-%m'),
+                '決済日': adjusted_date.strftime('%Y-%m-%d')
             })
 
             new_trades.at[match_index, '残り数量'] -= matched_qty
@@ -76,7 +83,8 @@ def process_trades(df: pd.DataFrame) -> pd.DataFrame:
                 '保有時間': pd.NaT,
                 'ロット数': normalized_lot,
                 '取引種別': trade_type,
-                '決済年月': closed_trade['約定日時'].strftime('%Y-%m')
+                '決済年月': adjusted_date.strftime('%Y-%m'),
+                '決済日': adjusted_date.strftime('%Y-%m-%d')
             })
 
     return pd.DataFrame(results)
@@ -179,11 +187,15 @@ if uploaded_file is not None:
             ]
             df = pd.read_csv(string_io, header=0, names=columns)
 
+            df['約定日時'] = pd.to_datetime(df['約定日時'])
+            df['adjusted_date'] = df['約定日時'].apply(get_adjusted_date)
+            df['決済年月'] = df['adjusted_date'].dt.strftime('%Y-%m')
+            df['決済日'] = df['adjusted_date'].dt.strftime('%Y-%m-%d')
+
             swap_df = df[df['取引区分'].str.contains('スワップ', na=False)].copy()
-            swap_df['約定日時'] = pd.to_datetime(swap_df['約定日時'])
-            swap_df['決済年月'] = swap_df['約定日時'].dt.strftime('%Y-%m')
             total_swap_profit = swap_df['実現損益（円貨）'].sum()
             monthly_swap_summary = swap_df.groupby('決済年月')['実現損益（円貨）'].sum().reset_index()
+            daily_swap_summary = swap_df.groupby('決済日')['実現損益（円貨）'].sum().reset_index()
 
             analyzed_df = process_trades(df.copy())
 
@@ -203,15 +215,17 @@ if uploaded_file is not None:
                     fx_total_display_order = ['総損益', '売買損益', 'スワップ', '取引回数', '勝ち数', '負け数', '勝率', '総利益', '総損失','PF','平均利益', '平均損失', 'RR', '1ロット利益', '1ロット損失', '勝ち平均時間', '負け平均時間']
                     st.dataframe(style_and_format_summary(fx_total_summary.set_index('種類')[fx_total_display_order]), use_container_width=True)
 
+                    st.markdown("**FX 日次グラフ**")
+                    fx_daily_summary = analyze_summary(fx_df, ['決済日'])
+                    fx_daily_for_chart = fx_daily_summary[['決済日', '総損益']]
+                    daily_swap_for_chart = daily_swap_summary.rename(columns={'実現損益（円貨）': 'スワップ損益'})
+                    chart_df_daily = pd.merge(fx_daily_for_chart, daily_swap_for_chart, on='決済日', how='outer').fillna(0)
+                    chart_df_daily['日次合計損益'] = chart_df_daily['総損益'] + chart_df_daily['スワップ損益']
+                    chart_df_daily['累積損益'] = chart_df_daily['日次合計損益'].cumsum()
+                    st.line_chart(chart_df_daily.set_index('決済日')['累積損益'])
+
                     st.markdown("**FX 月別サマリー**")
                     fx_monthly_summary = analyze_summary(fx_df, ['決済年月'])
-                    fx_monthly_for_chart = fx_monthly_summary[['決済年月', '総損益']]
-                    monthly_swap_for_chart = monthly_swap_summary.rename(columns={'実現損益（円貨）': 'スワップ損益'})
-                    chart_df = pd.merge(fx_monthly_for_chart, monthly_swap_for_chart, on='決済年月', how='outer').fillna(0)
-                    chart_df['月次合計損益'] = chart_df['総損益'] + chart_df['スワップ損益']
-                    chart_df['累積損益'] = chart_df['月次合計損益'].cumsum()
-                    st.line_chart(chart_df.set_index('決済年月')['累積損益'])
-                    
                     fx_monthly_display = fx_monthly_summary.rename(columns={'総損益': '売買損益'})
                     monthly_swap_df = monthly_swap_summary.rename(columns={'実現損益（円貨）': 'スワップ'})
                     combined_monthly = pd.merge(fx_monthly_display, monthly_swap_df, on='決済年月', how='outer')
@@ -244,11 +258,14 @@ if uploaded_file is not None:
                     cfd_total_summary = analyze_summary(cfd_df.copy(), ['取引種別']).rename(columns={'取引種別': '種類'})
                     st.dataframe(style_and_format_summary(cfd_total_summary.set_index('種類')), use_container_width=True)
 
+                    st.markdown("**CFD 日次グラフ**")
+                    cfd_daily_summary = analyze_summary(cfd_df, ['決済日'])
+                    cfd_daily_summary['累積損益'] = cfd_daily_summary['総損益'].cumsum()
+                    st.line_chart(cfd_daily_summary.set_index('決済日')['累積損益'])
+
                     st.markdown("**CFD 月別サマリー**")
                     cfd_monthly_summary = analyze_summary(cfd_df, ['決済年月'])
-                    cfd_monthly_summary['累積損益'] = cfd_monthly_summary['総損益'].cumsum()
-                    st.line_chart(cfd_monthly_summary.set_index('決済年月')['累積損益'])
-                    st.dataframe(style_and_format_summary(cfd_monthly_summary.drop(columns=['累積損益'])), use_container_width=True)
+                    st.dataframe(style_and_format_summary(cfd_monthly_summary), use_container_width=True)
 
                     st.markdown("**CFD 銘柄別サマリー**")
                     cfd_symbol_summary = analyze_summary(cfd_df, ['銘柄名', 'ポジション'])
@@ -270,6 +287,7 @@ st.info(
     """
     使い方\r\n
     1. GMOクリック証券の取引履歴CSVファイルをダウンロードしてください。（GMOクリック証券のマイページにログイン後、CFDまたはFXネオ→積算表\→FXネオ取引口座の取引とスワップを☑、CFDの取引を☑→分析したい期間を選択→検索のボタンをクリック→下段のダウンロードを選択）
-    2. ダウンロードしたCSVファイルをこのwebアプリにアップロードしてください。
+    2. ダウンロードしたCSVファイルをこのwebアプリにアップロードしてください。\r\n
+    ---harunami---
     """
 )
